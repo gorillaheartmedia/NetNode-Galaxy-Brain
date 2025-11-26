@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Galaxy Brain Engine</title>
+
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      overflow: hidden;
+      background: #02030a;
+    }
+
+    #app {
+      width: 100vw;
+      height: 100vh;
+      position: relative;
+      overflow: hidden;
+    }
+
+    /* WORLD BACKGROUND */
+    #world {
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(circle at top, #060b1a, #02030a 55%, #000 100%);
+      z-index: 1;
+      pointer-events: none;
+    }
+
+    /* LINKS (SVG) */
+    #links-layer {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      overflow: visible;
+      z-index: 2;
+    }
+
+    /* NODES LAYER */
+    #nodes-layer {
+      position: absolute;
+      inset: 0;
+      z-index: 3;
+      pointer-events: auto;
+    }
+
+    /* NODE VISUALS */
+    .node {
+      position: absolute;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: #0af;
+      transform: translate(-50%, -50%);
+      transition: box-shadow 0.15s ease, transform 0.15s ease;
+      cursor: pointer;
+      box-shadow: 0 0 0 0 rgba(0, 255, 255, 0);
+    }
+
+    .node.selected {
+      box-shadow: 0 0 14px 3px rgba(255, 255, 255, 0.9);
+    }
+
+    .node:hover {
+      box-shadow: 0 0 14px 4px rgba(0, 200, 255, 0.95);
+      transform: translate(-50%, -50%) scale(1.3);
+    }
+
+    /* Hover label */
+    .node-label {
+      position: absolute;
+      top: -24px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 3px 8px;
+      border-radius: 6px;
+      background: rgba(5, 10, 25, 0.85);
+      color: #7dd3ff;
+      white-space: nowrap;
+      font-size: 11px;
+      opacity: 0;
+      pointer-events: none;
+      border: 1px solid rgba(125, 211, 255, 0.6);
+      box-shadow: 0 0 16px rgba(56, 189, 248, 0.5);
+      transition: opacity 0.2s ease;
+      text-shadow: 0 0 10px #38bdf8;
+    }
+
+    .node:hover .node-label {
+      opacity: 1;
+    }
+
+    /* Some fallback default link classes */
+    .link-normal { stroke: #8acbff; stroke-width: 3; }
+    .link-strong { stroke: #8acbff; stroke-width: 5; }
+    .link-strained { stroke: #ff5c5c; stroke-width: 3; stroke-dasharray: 6 4; }
+
+    .selected-link {
+      stroke-width: 5 !important;
+      filter: drop-shadow(0 0 10px white);
+    }
+
+    /* Toolbar */
+    #toolbar {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 10;
+      pointer-events: auto;
+    }
+
+    #toolbar button {
+      background: #0b1220;
+      color: #9bd9ff;
+      border: 1px solid rgba(120,180,255,0.4);
+      border-radius: 8px;
+      padding: 6px 12px;
+      cursor: pointer;
+      margin-right: 6px;
+      font-weight: bold;
+    }
+
+    /* Tag Chips */
+    .tag-chip {
+      display:inline-block;
+      padding:2px 8px;
+      margin:2px 4px 2px 0;
+      border-radius:999px;
+      border:1px solid rgba(148, 163, 184, 0.7);
+      font-size:11px;
+      color:#e2f3ff;
+      background:#1f2937;
+    }
+
+    /* FILTERED OUT */
+    .node.tag-dimmed {
+      opacity: 0.18;
+      filter: grayscale(0.8);
+    }
+    .link.tag-dimmed {
+      opacity: 0.18;
+      filter: grayscale(0.8);
+    }
+
+    /* ---------------------------
+       LINK POPUP EDITOR
+    ---------------------------- */
+    #link-editor {
+      position:absolute;
+      display:none;
+      background:#0b1220;
+      padding:12px 16px;
+      border-radius:8px;
+      border:1px solid rgba(120,180,255,0.4);
+      color:#c8e9ff;
+      z-index:99999;
+      box-shadow:0 0 14px rgba(80,140,255,0.4);
+    }
+
+    #link-editor select,
+    #link-editor input[type=range] {
+      width:160px;
+      padding:6px;
+      background:#09111d;
+      color:#c8e9ff;
+      border:1px solid rgba(120,180,255,0.4);
+      border-radius:6px;
+      margin-bottom:12px;
+    }
+
+    #delete-link-btn {
+      background:#3b0f18;
+      border:1px solid rgba(200,80,80,0.7);
+      color:#ffb9b9;
+      padding:6px 10px;
+      border-radius:6px;
+      cursor:pointer;
+      width:100%;
+      font-size:13px;
+      font-weight:600;
+    }
+
+  </style>
+</head>
+
+<body>
+
+  <!-- LINK POPUP EDITOR -->
+  <div id="link-editor">
+    <label style="display:block;margin-bottom:6px;font-weight:600;">Link Type</label>
+    <select id="link-type-select">
+      <option value="normal">Normal</option>
+      <option value="strong">Strong (Thick)</option>
+      <option value="strained">Strained (Dotted)</option>
+    </select>
+
+    <label style="display:block;margin-bottom:6px;font-weight:600;">Strength</label>
+    <input type="range" id="link-strength-slider" min="0" max="100" value="50">
+
+    <button id="delete-link-btn">Delete Link</button>
+  </div>
+
+  <div id="app">
+
+    <!-- BACKGROUND WORLD -->
+    <div id="world"></div>
+
+    <!-- LINKS SVG -->
+    <svg id="links-layer"></svg>
+
+    <!-- NODES -->
+    <div id="nodes-layer"></div>
+
+    <!-- TOOLBAR -->
+    <div id="toolbar"></div>
+
+    <!-- Panel is created dynamically by panel.js -->
+
+  </div>
+
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>
