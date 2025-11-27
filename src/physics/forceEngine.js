@@ -1,183 +1,226 @@
 // src/physics/forceEngine.js
 //
-// ForceAtlas2-style physics engine for Galaxy Brain Engine
-//---------------------------------------------------------
-// - Nodes live in WORLD space: node.x, node.y
-// - Camera: app.state.camera { x, y, zoom }
-// - Rendering uses worldToScreen() in nodes/links
-// - Physics updates world positions only
-//
+// Galaxy Brain Engine – Soft-Body Physics Mode Switching
+//------------------------------------------------------------
 
 export function initPhysics(app) {
-  console.log("Physics engine initialized (ForceAtlas2-style).");
+  console.log("Physics engine (Soft-Body Mode) initialized.");
 
-  const state = app.state;
-
-  // Basic config
-  const config = {
-    repulsion: 2500,
-    attraction: 0.01,
-    gravity: 0.05,
-    damping: 0.85,
-    maxSpeed: 5,
-    timeStep: 0.02
-  };
-
-  if (!state.physics) {
-    state.physics = {
+  // Guarantee physics state exists BEFORE first frame
+  if (!app.state.physics) {
+    app.state.physics = {
       running: true,
       speed: 1.0
     };
   }
 
-  // Initialize velocity fields
-  for (const node of state.nodes) {
-    if (typeof node.vx !== "number") node.vx = 0;
-    if (typeof node.vy !== "number") node.vy = 0;
+  const state = app.state;
+
+  // -------------------------------------
+  // Core physics configuration
+  // -------------------------------------
+  const config = {
+    // Base repulsion when NOT dragging
+    repulsion: 2500,
+
+    // Base damping (dragging lowers this)
+    damping: 0.86,
+
+    // Simulation time factor
+    timeStep: 0.02,
+
+    // Max movement speed
+    maxSpeed: 5,
+
+    // Spring physics
+    springK: 0.015,        // base stiffness
+    restLength: 90,        // default link length
+    springDamping: 0.10,   // energy loss
+    springBoost: 12,       // yank and wobble amplitude
+
+    // Drift motion
+    driftRadius: 160,
+    driftSpeed: 0.40
+  };
+
+  // Ensure velocities exist
+  for (const n of state.nodes) {
+    if (typeof n.vx !== "number") n.vx = 0;
+    if (typeof n.vy !== "number") n.vy = 0;
   }
 
+  // Drift animation phase
+  let driftT = 0;
+
   // ------------------------------------------------------------
-  // Helper: Is any node currently being dragged?
+  // DRIFT — oscillates around camera center (idle only)
   // ------------------------------------------------------------
+  function applyDrift(nodes, dt) {
+    driftT += config.driftSpeed * dt;
+
+    const cam = state.camera;
+
+    const cx = (window.innerWidth / 2 - cam.x) / cam.zoom;
+    const cy = (window.innerHeight / 2 - cam.y) / cam.zoom;
+
+    const tx = cx + Math.cos(driftT) * config.driftRadius;
+    const ty = cy + Math.sin(driftT * 0.7) * config.driftRadius;
+
+    for (const n of nodes) {
+      if (n._dragging) continue;
+
+      const dx = tx - n.x;
+      const dy = ty - n.y;
+
+      n.vx += dx * 0.0003;
+      n.vy += dy * 0.0003;
+    }
+  }
+
   function nodeBeingDragged() {
-    return state.nodes.some(n => n._dragging === true);
+    return state.nodes.some(n => n._dragging);
+  }
+
+  function isFixed(n) {
+    return n._dragging || n.fixed;
   }
 
   // ------------------------------------------------------------
-  // PHYSICS STEP LOOP
+  // MAIN PHYSICS LOOP
   // ------------------------------------------------------------
   function step() {
-    if (!state.physics.running) {
-      requestAnimationFrame(step);
-      return;
-    }
+    if (!state.physics.running) return requestAnimationFrame(step);
 
     const nodes = state.nodes;
-    const links = state.links || [];
+    const links = state.links;
     const N = nodes.length;
 
-    if (N === 0) {
-      requestAnimationFrame(step);
-      return;
-    }
+    if (N === 0) return requestAnimationFrame(step);
 
-    const dt = config.timeStep * (state.physics.speed || 1);
+    const dt = config.timeStep * state.physics.speed;
+    const dragging = nodeBeingDragged();
 
-    // ---------- REPULSION ----------
+    // ------------------------------------------------------------
+    // 1. REPULSION — DISABLED DURING DRAG (so wobble can propagate)
+    // ------------------------------------------------------------
+    const repulse = dragging ? 0 : config.repulsion;
+
     for (let i = 0; i < N; i++) {
       const n1 = nodes[i];
-
-      if (typeof n1.vx !== "number") n1.vx = 0;
-      if (typeof n1.vy !== "number") n1.vy = 0;
-
       for (let j = i + 1; j < N; j++) {
         const n2 = nodes[j];
 
-        if (typeof n2.vx !== "number") n2.vx = 0;
-        if (typeof n2.vy !== "number") n2.vy = 0;
-
         let dx = n1.x - n2.x;
         let dy = n1.y - n2.y;
-        let dist2 = dx * dx + dy * dy;
 
-        if (dist2 === 0) {
-          dx = (Math.random() - 0.5) * 0.01;
-          dy = (Math.random() - 0.5) * 0.01;
-          dist2 = dx * dx + dy * dy;
+        let d2 = dx * dx + dy * dy;
+        if (d2 === 0) {
+          dx = (Math.random() - 0.5) * 0.02;
+          dy = (Math.random() - 0.5) * 0.02;
+          d2 = dx * dx + dy * dy;
         }
 
-        const dist = Math.sqrt(dist2);
-        const force = config.repulsion / dist2;
+        const d = Math.sqrt(d2);
+        const f = repulse / d2;  // 🔥 repulsion suppressed while dragging
 
-        const fx = (dx / dist) * force;
-        const fy = (dy / dist) * force;
+        const fx = (dx / d) * f;
+        const fy = (dy / d) * f;
 
-        if (!isPinned(n1)) {
-          n1.vx += fx * dt;
-          n1.vy += fy * dt;
-        }
-        if (!isPinned(n2)) {
-          n2.vx -= fx * dt;
-          n2.vy -= fy * dt;
-        }
+        if (!isFixed(n1)) { n1.vx += fx * dt; n1.vy += fy * dt; }
+        if (!isFixed(n2)) { n2.vx -= fx * dt; n2.vy -= fy * dt; }
       }
     }
 
-    // ---------- ATTRACTION (LINK SPRINGS) ----------
+    // ------------------------------------------------------------
+    // 2. RUBBER-BAND SPRINGS (Hooke’s Law)
+    // ------------------------------------------------------------
     for (const link of links) {
-      const a = nodes.find(n => n.id === link.source || n.id === link.sourceId);
-      const b = nodes.find(n => n.id === link.target || n.id === link.targetId);
+      const a = nodes.find(n => n.id === link.source);
+      const b = nodes.find(n => n.id === link.target);
       if (!a || !b) continue;
 
-      let dx = a.x - b.x;
-      let dy = a.y - b.y;
-      let dist2 = dx * dx + dy * dy;
+      let dx = b.x - a.x;
+      let dy = b.y - a.y;
 
-      if (dist2 === 0) {
-        dx = (Math.random() - 0.5) * 0.01;
-        dy = (Math.random() - 0.5) * 0.01;
-        dist2 = dx * dx + dy * dy;
-      }
-
-      const dist = Math.sqrt(dist2);
-      const force = config.attraction * dist;
-
-      const fx = (dx / dist) * force;
-      const fy = (dy / dist) * force;
-
-      if (!isPinned(a)) {
-        a.vx -= fx * dt;
-        a.vy -= fy * dt;
-      }
-      if (!isPinned(b)) {
-        b.vx += fx * dt;
-        b.vy += fy * dt;
-      }
-    }
-
-    // ---------- GRAVITY ----------
-    for (const node of nodes) {
-      if (isPinned(node)) continue;
-
-      const dx = node.x;
-      const dy = node.y;
       const dist = Math.sqrt(dx * dx + dy * dy) || 1;
 
-      const force = config.gravity * dist;
+      // assign persistent rest length
+      if (!link.restLength) link.restLength = config.restLength;
+      const rest = link.restLength;
 
-      const fx = (-dx / dist) * force;
-      const fy = (-dy / dist) * force;
+      // stiffness: stronger during drag
+      const k = dragging ? config.springK * 4 : config.springK;
 
-      node.vx += fx * dt;
-      node.vy += fy * dt;
-    }
+      // Hooke: F = -k (x - rest)
+      const displacement = dist - rest;
+      const force = k * displacement;
 
-    // ---------- INTEGRATION ----------
-    for (const node of nodes) {
-      if (isPinned(node)) continue;
+      const nx = dx / dist;
+      const ny = dy / dist;
 
-      node.vx *= config.damping;
-      node.vy *= config.damping;
+      // A-side
+      if (!a._dragging) {
+        a.vx += nx * force * dt;
+        a.vy += ny * force * dt;
 
-      const speed = Math.sqrt(node.vx * node.vx + node.vy * node.vy);
-      if (speed > config.maxSpeed) {
-        const scale = config.maxSpeed / speed;
-        node.vx *= scale;
-        node.vy *= scale;
+        a.vx *= (1 - config.springDamping);
+        a.vy *= (1 - config.springDamping);
       }
 
-      node.x += node.vx * dt;
-      node.y += node.vy * dt;
+      // B-side
+      if (!b._dragging) {
+        b.vx -= nx * force * dt;
+        b.vy -= ny * force * dt;
+
+        b.vx *= (1 - config.springDamping);
+        b.vy *= (1 - config.springDamping);
+      }
+
+      // --------------------------------------------------------
+      // DRAG BOOST — the secret sauce for chain-reaction wobble
+      // --------------------------------------------------------
+      if (dragging && (a._dragging || b._dragging)) {
+        const boost = config.springBoost;
+
+        a.vx += nx * force * dt * boost;
+        a.vy += ny * force * dt * boost;
+
+        b.vx -= nx * force * dt * boost;
+        b.vy -= ny * force * dt * boost;
+      }
     }
 
-    // ---------- RENDER ----------
-    //
-    // DO NOT destroy/rebuild DOM while a node is being clicked or dragged.
-    //
-    if (!nodeBeingDragged()) {
-      app.renderNodes();
+    // ------------------------------------------------------------
+    // 3. DRIFT — ONLY IF NOT DRAGGING
+    // ------------------------------------------------------------
+    if (!dragging) {
+      applyDrift(nodes, dt);
     }
 
+    // ------------------------------------------------------------
+    // 4. INTEGRATION (movement)
+    // ------------------------------------------------------------
+    for (const n of nodes) {
+      if (isFixed(n)) continue;
+
+      // LESS damping during drag = MORE wobble
+      const damp = dragging ? 0.65 : config.damping;
+
+      n.vx *= damp;
+      n.vy *= damp;
+
+      const s = Math.sqrt(n.vx * n.vx + n.vy * n.vy);
+      if (s > config.maxSpeed) {
+        const m = config.maxSpeed / s;
+        n.vx *= m;
+        n.vy *= m;
+      }
+
+      n.x += n.vx * dt;
+      n.y += n.vy * dt;
+    }
+
+    if (!dragging) app.renderNodes();
     app.renderLinks();
 
     requestAnimationFrame(step);
@@ -185,7 +228,7 @@ export function initPhysics(app) {
 
   requestAnimationFrame(step);
 
-  // Allow UI to pause/resume physics
+  // Public controls
   app.pausePhysics = () => { state.physics.running = false; };
   app.resumePhysics = () => {
     if (!state.physics.running) {
@@ -193,9 +236,4 @@ export function initPhysics(app) {
       requestAnimationFrame(step);
     }
   };
-}
-
-// Node is pinned if being dragged or explicitly fixed.
-function isPinned(node) {
-  return node._dragging || node.fixed;
 }
